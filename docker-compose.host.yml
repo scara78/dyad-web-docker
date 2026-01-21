@@ -1,0 +1,3 @@
+services:
+  dyad:
+    network_mode: host

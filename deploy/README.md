@@ -50,3 +50,8 @@ cp .env.example .env
 # edit .env to match your server IP and ports
 docker compose up -d
 ```
+
+Linux host networking (avoids binding full preview port ranges):
+```bash
+docker compose -f docker-compose.yml -f docker-compose.host.yml up -d --build
+```
