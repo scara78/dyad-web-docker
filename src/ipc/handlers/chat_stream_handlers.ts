@@ -169,53 +169,65 @@ async function processStreamChunks({
 }): Promise<{ fullResponse: string; incrementalResponse: string }> {
   let incrementalResponse = "";
   let inThinkingBlock = false;
+  let aborted = false;
 
-  for await (const part of fullStream) {
-    let chunk = "";
-    if (
-      inThinkingBlock &&
-      !["reasoning-delta", "reasoning-end", "reasoning-start"].includes(
-        part.type,
-      )
-    ) {
-      chunk = "</think>";
-      inThinkingBlock = false;
-    }
-    if (part.type === "text-delta") {
-      chunk += part.text;
-    } else if (part.type === "reasoning-delta") {
-      if (!inThinkingBlock) {
-        chunk = "<think>";
-        inThinkingBlock = true;
+  try {
+    for await (const part of fullStream) {
+      if (abortController.signal.aborted) {
+        aborted = true;
+        continue;
       }
 
-      chunk += escapeDyadTags(part.text);
-    } else if (part.type === "tool-call") {
-      const { serverName, toolName } = parseMcpToolKey(part.toolName);
-      const content = escapeDyadTags(JSON.stringify(part.input));
-      chunk = `<dyad-mcp-tool-call server="${serverName}" tool="${toolName}">\n${content}\n</dyad-mcp-tool-call>\n`;
-    } else if (part.type === "tool-result") {
-      const { serverName, toolName } = parseMcpToolKey(part.toolName);
-      const content = escapeDyadTags(part.output);
-      chunk = `<dyad-mcp-tool-result server="${serverName}" tool="${toolName}">\n${content}\n</dyad-mcp-tool-result>\n`;
+      let chunk = "";
+      if (
+        inThinkingBlock &&
+        !["reasoning-delta", "reasoning-end", "reasoning-start"].includes(
+          part.type,
+        )
+      ) {
+        chunk = "</think>";
+        inThinkingBlock = false;
+      }
+      if (part.type === "text-delta") {
+        chunk += part.text;
+      } else if (part.type === "reasoning-delta") {
+        if (!inThinkingBlock) {
+          chunk = "<think>";
+          inThinkingBlock = true;
+        }
+
+        chunk += escapeDyadTags(part.text);
+      } else if (part.type === "tool-call") {
+        const { serverName, toolName } = parseMcpToolKey(part.toolName);
+        const content = escapeDyadTags(JSON.stringify(part.input));
+        chunk = `<dyad-mcp-tool-call server="${serverName}" tool="${toolName}">\n${content}\n</dyad-mcp-tool-call>\n`;
+      } else if (part.type === "tool-result") {
+        const { serverName, toolName } = parseMcpToolKey(part.toolName);
+        const content = escapeDyadTags(part.output);
+        chunk = `<dyad-mcp-tool-result server="${serverName}" tool="${toolName}">\n${content}\n</dyad-mcp-tool-result>\n`;
+      }
+
+      if (!chunk) {
+        continue;
+      }
+
+      fullResponse += chunk;
+      incrementalResponse += chunk;
+      fullResponse = cleanFullResponse(fullResponse);
+      fullResponse = await processResponseChunkUpdate({
+        fullResponse,
+      });
     }
-
-    if (!chunk) {
-      continue;
-    }
-
-    fullResponse += chunk;
-    incrementalResponse += chunk;
-    fullResponse = cleanFullResponse(fullResponse);
-    fullResponse = await processResponseChunkUpdate({
-      fullResponse,
-    });
-
-    // If the stream was aborted, exit early
+  } catch (error) {
     if (abortController.signal.aborted) {
-      logger.log(`Stream for chat ${chatId} was aborted`);
-      break;
+      logger.warn(`Stream error after abort for chat ${chatId}`, error);
+      return { fullResponse, incrementalResponse };
     }
+    throw error;
+  }
+
+  if (aborted) {
+    logger.log(`Stream for chat ${chatId} was aborted`);
   }
 
   return { fullResponse, incrementalResponse };
