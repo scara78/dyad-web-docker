@@ -59,7 +59,7 @@ import { useVersions } from "@/hooks/useVersions";
 import { useAttachments } from "@/hooks/useAttachments";
 import { AttachmentsList } from "./AttachmentsList";
 import { DragDropOverlay } from "./DragDropOverlay";
-import { showExtraFilesToast, showError } from "@/lib/toast";
+import { showExtraFilesToast, showError as showErrorToast } from "@/lib/toast";
 import { useSummarizeInNewChat } from "./SummarizeInNewChatButton";
 import { ChatInputControls } from "../ChatInputControls";
 import { ChatErrorBox } from "./ChatErrorBox";
@@ -254,7 +254,7 @@ export function ChatInput({ chatId }: { chatId?: number }) {
     } catch (err) {
       console.error("Error approving proposal:", err);
       setError((err as Error)?.message || "An error occurred while approving");
-      showError(err as Error);
+      showErrorToast(err as Error);
     } finally {
       setIsApproving(false);
       setIsPreviewOpen(true);
@@ -285,7 +285,7 @@ export function ChatInput({ chatId }: { chatId?: number }) {
     } catch (err) {
       console.error("Error rejecting proposal:", err);
       setError((err as Error)?.message || "An error occurred while rejecting");
-      showError(err as Error);
+      showErrorToast(err as Error);
     } finally {
       setIsRejecting(false);
       // Keep same as handleApprove

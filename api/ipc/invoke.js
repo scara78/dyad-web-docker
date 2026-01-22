@@ -15,7 +15,8 @@ module.exports = async (req, res) => {
     process.env.DYAD_WEB_MODE = "true";
   }
   if (!process.env.DYAD_PROXY_LISTEN_HOST) {
-    process.env.DYAD_PROXY_LISTEN_HOST = "0.0.0.0";
+    process.env.DYAD_PROXY_LISTEN_HOST =
+      process.platform === "win32" ? "127.0.0.1" : "0.0.0.0";
   }
   if (!process.env.DYAD_PUBLIC_PROTOCOL) {
     process.env.DYAD_PUBLIC_PROTOCOL = "https";

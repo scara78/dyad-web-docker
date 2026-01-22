@@ -111,6 +111,11 @@ type FileCache = {
   mtime: number;
 };
 
+type FileEntry = {
+  path: string;
+  mtimeMs: number;
+};
+
 // Cache for file contents
 const fileContentCache = new Map<string, FileCache>();
 
@@ -194,6 +199,7 @@ async function isGitIgnored(
 export async function readFileWithCache(
   filePath: string,
   virtualFileSystem?: AsyncVirtualFileSystem,
+  knownMtime?: number,
 ): Promise<string | undefined> {
   try {
     // Check virtual filesystem first if provided
@@ -205,8 +211,13 @@ export async function readFileWithCache(
     }
 
     // Get file stats to check the modification time
-    const stats = await fsAsync.stat(filePath);
-    const currentMtime = stats.mtimeMs;
+    let currentMtime: number;
+    if (typeof knownMtime === "number" && Number.isFinite(knownMtime)) {
+      currentMtime = knownMtime;
+    } else {
+      const stats = await fsAsync.stat(filePath);
+      currentMtime = stats.mtimeMs;
+    }
 
     // If file is in cache and hasn't been modified, use cached content
     if (fileContentCache.has(filePath)) {
@@ -246,8 +257,11 @@ export async function readFileWithCache(
 /**
  * Recursively walk a directory and collect all relevant files
  */
-async function collectFiles(dir: string, baseDir: string): Promise<string[]> {
-  const files: string[] = [];
+async function collectFiles(
+  dir: string,
+  baseDir: string,
+): Promise<FileEntry[]> {
+  const files: FileEntry[] = [];
 
   // Check if directory exists
   try {
@@ -291,13 +305,11 @@ async function collectFiles(dir: string, baseDir: string): Promise<string[]> {
           if (stats.size > MAX_FILE_SIZE) {
             return;
           }
+          files.push({ path: fullPath, mtimeMs: stats.mtimeMs });
         } catch (error) {
           logger.error(`Error checking file size: ${fullPath}`, error);
           return;
         }
-
-        // Include all files in the list
-        files.push(fullPath);
       }
     });
 
@@ -369,10 +381,14 @@ async function formatFile({
   filePath,
   normalizedRelativePath,
   virtualFileSystem,
+  contentOverride,
+  knownMtime,
 }: {
   filePath: string;
   normalizedRelativePath: string;
   virtualFileSystem?: AsyncVirtualFileSystem;
+  contentOverride?: string | null;
+  knownMtime?: number;
 }): Promise<string> {
   try {
     // Check if we should read file contents
@@ -384,7 +400,10 @@ ${OMITTED_FILE_CONTENT}
 `;
     }
 
-    const content = await readFileWithCache(filePath, virtualFileSystem);
+    const content =
+      contentOverride === undefined
+        ? await readFileWithCache(filePath, virtualFileSystem, knownMtime)
+        : contentOverride;
 
     if (content == null) {
       return `<dyad-file path="${normalizedRelativePath}">
@@ -466,14 +485,14 @@ export async function extractCodebase({
         .getDeletedFiles()
         .map((relativePath) => path.resolve(appPath, relativePath)),
     );
-    files = files.filter((file) => !deletedFiles.has(file));
+    files = files.filter((file) => !deletedFiles.has(file.path));
 
     // Add virtual files
     const virtualFiles = virtualFileSystem.getVirtualFiles();
     for (const virtualFile of virtualFiles) {
       const absolutePath = path.resolve(appPath, virtualFile.path);
-      if (!files.includes(absolutePath)) {
-        files.push(absolutePath);
+      if (!files.some((entry) => entry.path === absolutePath)) {
+        files.push({ path: absolutePath, mtimeMs: Date.now() });
       }
     }
   }
@@ -549,50 +568,72 @@ export async function extractCodebase({
   // Only filter files if contextPaths are provided
   // If only smartContextAutoIncludes are provided, keep all files and just mark auto-includes as forced
   if (contextPaths && contextPaths.length > 0) {
-    files = files.filter((file) => includedFiles.has(path.normalize(file)));
+    files = files.filter((file) =>
+      includedFiles.has(path.normalize(file.path)),
+    );
   }
 
   // Filter out excluded files (this takes precedence over include paths)
   if (excludedFiles.size > 0) {
-    files = files.filter((file) => !excludedFiles.has(path.normalize(file)));
+    files = files.filter(
+      (file) => !excludedFiles.has(path.normalize(file.path)),
+    );
   }
 
   // Sort files by modification time (oldest first)
   // This is important for cache-ability.
-  const sortedFiles = await sortFilesByModificationTime([...new Set(files)]);
+  const dedupedFiles = new Map<string, FileEntry>();
+  for (const entry of files) {
+    const existing = dedupedFiles.get(entry.path);
+    if (!existing || entry.mtimeMs > existing.mtimeMs) {
+      dedupedFiles.set(entry.path, entry);
+    }
+  }
+  const sortedFiles = sortFilesByModificationTime(
+    Array.from(dedupedFiles.values()),
+  );
 
   // Format files and collect individual file contents
   const filesArray: CodebaseFile[] = [];
   const formatPromises = sortedFiles.map(async (file) => {
     // Get raw content for the files array
     const normalizedRelativePath = path
-      .relative(appPath, file)
+      .relative(appPath, file.path)
       // Why? Normalize Windows-style paths which causes lots of weird issues (e.g. Git commit)
       .split(path.sep)
       .join("/");
+    const shouldRead = shouldReadFileContents({
+      filePath: file.path,
+      normalizedRelativePath,
+    });
+    const shouldReadSmart = shouldReadFileContentsForSmartContext({
+      filePath: file.path,
+      normalizedRelativePath,
+    });
+    const needsContent = shouldRead || shouldReadSmart;
+    const content = needsContent
+      ? (await readFileWithCache(
+          file.path,
+          virtualFileSystem,
+          file.mtimeMs,
+        )) ?? null
+      : undefined;
     const formattedContent = await formatFile({
-      filePath: file,
+      filePath: file.path,
       normalizedRelativePath,
       virtualFileSystem,
+      contentOverride: content,
+      knownMtime: file.mtimeMs,
     });
 
     const isForced =
-      autoIncludedFiles.has(path.normalize(file)) &&
-      !excludedFiles.has(path.normalize(file));
+      autoIncludedFiles.has(path.normalize(file.path)) &&
+      !excludedFiles.has(path.normalize(file.path));
 
     // Determine file content based on whether we should read it
-    let fileContent: string;
-    if (
-      !shouldReadFileContentsForSmartContext({
-        filePath: file,
-        normalizedRelativePath,
-      })
-    ) {
-      fileContent = OMITTED_FILE_CONTENT;
-    } else {
-      const readContent = await readFileWithCache(file, virtualFileSystem);
-      fileContent = readContent ?? "// Error reading file";
-    }
+    const fileContent = shouldReadSmart
+      ? content ?? "// Error reading file"
+      : OMITTED_FILE_CONTENT;
 
     filesArray.push({
       path: normalizedRelativePath,
@@ -624,33 +665,16 @@ export async function extractCodebase({
 /**
  * Sort files by their modification timestamp (oldest first)
  */
-async function sortFilesByModificationTime(files: string[]): Promise<string[]> {
-  // Get stats for all files
-  const fileStats = await Promise.all(
-    files.map(async (file) => {
-      try {
-        const stats = await fsAsync.stat(file);
-        return { file, mtime: stats.mtimeMs };
-      } catch (error) {
-        // If there's an error getting stats, use current time as fallback
-        // This can happen with virtual files, so it's not a big deal.
-        logger.warn(`Error getting file stats for ${file}:`, error);
-        return { file, mtime: Date.now() };
-      }
-    }),
-  );
-
+function sortFilesByModificationTime(files: FileEntry[]): FileEntry[] {
   if (IS_TEST_BUILD) {
     // Why? For some reason, file ordering is not stable on Windows.
     // This is a workaround to ensure stable ordering, although
     // ideally we'd like to sort it by modification time which is
     // important for cache-ability.
-    return fileStats
-      .sort((a, b) => a.file.localeCompare(b.file))
-      .map((item) => item.file);
+    return [...files].sort((a, b) => a.path.localeCompare(b.path));
   }
   // Sort by modification time (oldest first)
-  return fileStats.sort((a, b) => a.mtime - b.mtime).map((item) => item.file);
+  return [...files].sort((a, b) => a.mtimeMs - b.mtimeMs);
 }
 
 function createFullGlobPath({

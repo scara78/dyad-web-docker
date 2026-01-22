@@ -40,7 +40,6 @@ import fixPath from "fix-path";
 import killPort from "kill-port";
 import util from "util";
 import log from "@/utils/simple_logger";
-import os from "node:os";
 import {
   deploySupabaseFunction,
   getSupabaseProjectName,
@@ -92,21 +91,15 @@ function getAccessibleHostname(): string {
     );
     return process.env.DYAD_SERVER_HOSTNAME;
   }
-
-  // Try to detect if running on a server vs local machine
-  // On servers, prefer hostname over localhost
-  const hostname = os.hostname();
-
-  // If hostname is localhost or 127.0.0.1, we're likely in local development
-  if (hostname === "localhost" || hostname === "127.0.0.1") {
-    return "localhost";
+  const publicHost = process.env.DYAD_PUBLIC_HOST;
+  if (publicHost) {
+    if (publicHost === "0.0.0.0" || publicHost === "::") {
+      return "localhost";
+    }
+    return publicHost;
   }
 
-  // For server environments, use the actual hostname
-  logger.info(
-    `Detected server environment. Using hostname for remote access: ${hostname}`,
-  );
-  return hostname;
+  return "localhost";
 }
 
 function sanitizeSnippetText(text: string) {
