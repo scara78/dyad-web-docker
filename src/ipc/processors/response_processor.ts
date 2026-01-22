@@ -565,6 +565,16 @@ export async function processFullResponseActions(
         await gitAdd({ path: appPath, filepath: file });
       }
 
+      const pendingChanges = await getGitUncommittedFiles({ path: appPath });
+      if (pendingChanges.length === 0) {
+        logger.log(
+          "No git changes detected after applying proposal; skipping commit.",
+        );
+        hasChanges = false;
+      }
+    }
+
+    if (hasChanges) {
       // Create commit with details of all changes
       const changes = [];
       if (writtenFiles.length > 0)
