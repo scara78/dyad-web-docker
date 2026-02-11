@@ -437,6 +437,6 @@ server.on("upgrade", (req, socket, _head) => {
 
 server.listen(LISTEN_PORT, LISTEN_HOST, () => {
   parentPort?.postMessage(
-    `proxy-server-start url=${PUBLIC_PROTOCOL}://${PUBLIC_HOST}:${LISTEN_PORT}`,
+    `proxy-server-start url=${PUBLIC_PROTOCOL}://${PUBLIC_HOST}`,
   );
 });
