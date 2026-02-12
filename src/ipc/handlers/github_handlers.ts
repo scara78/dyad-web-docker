@@ -403,6 +403,31 @@ function handleStartGithubFlow(
 ) {
   logger.debug(`Received github:start-flow for appId: ${args.appId}`);
 
+  // ---------------------------------------------------------------------------
+  // PATCH START: Check for Environment Variable Token (Docker/Headless support)
+  // ---------------------------------------------------------------------------
+  if (process.env.DYAD_GITHUB_TOKEN) {
+    logger.info("[GitHub Handler] 🐳 Found DYAD_GITHUB_TOKEN in Env. Bypassing GUI flow.");
+    
+    // Save the token from environment directly to settings
+    writeSettings({
+      githubAccessToken: {
+        value: process.env.DYAD_GITHUB_TOKEN,
+      },
+    });
+
+    // Notify the frontend that authentication was successful
+    event.sender.send("github:flow-success", {
+      message: "Successfully connected via Environment Token!",
+    });
+    
+    // Exit function early so we don't try to get a BrowserWindow
+    return;
+  }
+  // ---------------------------------------------------------------------------
+  // PATCH END
+  // ---------------------------------------------------------------------------
+
   // If a flow is already in progress, maybe cancel it or send an error
   if (currentFlowState && currentFlowState.isPolling) {
     logger.warn("Another GitHub flow is already in progress.");
@@ -416,6 +441,13 @@ function handleStartGithubFlow(
   const window = BrowserWindow.fromWebContents(event.sender);
   if (!window) {
     logger.error("Could not get BrowserWindow instance.");
+    // In headless/Docker without the token patch above, this would fail silently or with an error.
+    // We send an error back to the frontend if possible.
+    try {
+      event.sender.send("github:flow-error", { 
+        error: "Headless mode detected. Please set DYAD_GITHUB_TOKEN in your environment variables." 
+      });
+    } catch (e) { /* ignore if sender is dead */ }
     return;
   }
 
@@ -1312,4 +1344,3 @@ export async function updateAppGithubRepo({
     })
     .where(eq(schema.apps.id, appId));
 }
-
