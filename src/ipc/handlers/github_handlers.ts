@@ -424,7 +424,7 @@ function handleStartGithubFlow(
     interval: 5, // Default interval
     timeoutId: null,
     isPolling: false,
-    window: window,
+    window: window || null,
   };
 
   event.sender.send("github:flow-update", {
@@ -459,20 +459,6 @@ function handleStartGithubFlow(
       currentFlowState.deviceCode = data.device_code;
       currentFlowState.interval = data.interval || 5;
       currentFlowState.isPolling = true;
-
-      // DESCHIDE AUTOMAT BROWSERUL
-  if (data.verification_uri) {
-    shell.openExternal(data.verification_uri);
-  }
-
-  // Trimite datele către UI pentru a afișa codul
-  event.sender.send("github:flow-update", {
-    userCode: data.user_code,
-    verificationUri: data.verification_uri,
-    message: "Te rugăm să introduci codul în fereastra deschisă.",
-  });
-
-      
 
       // Send user code and verification URI to renderer
       event.sender.send("github:flow-update", {
@@ -1326,5 +1312,4 @@ export async function updateAppGithubRepo({
     })
     .where(eq(schema.apps.id, appId));
 }
-
 
